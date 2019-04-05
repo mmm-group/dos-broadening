@@ -35,7 +35,7 @@ Fastest: shift
 Choose debug to compare them all
 """
 # Default: linalg
-method = "linalg"
+method = "debug"
 
 """
 parameter
@@ -45,7 +45,7 @@ grid_spacing : float
 Energy grid spacing
 
 For  shift: Use 0.0005 or smaller
-For   conv: Use 0.0001 or smaller - does not work properly
+For   conv: Use 0.01
 For linalg: Use 0.01
 For    add: Use 0.01
 """
@@ -62,10 +62,10 @@ Energy range minimum and maximum (in eV), zero is fermi energy
 Final grid returned is slightly smaller than requested value in shift - use a slightly larger grid for this method
 """
 # Default: -12
-minCalc = -12
+minCalc = -15
 
 # Default: 12
-maxCalc =  12
+maxCalc =  15
 
 """
 parameters
@@ -95,6 +95,9 @@ saveTxt = False
 # Number used to convert from (a.u.) to eV
 # set to 1 for a.u. results
 conversion2ev = 27.2113838565563
+
+# Convolution requires a more converged grid, this many more grid points are used in convolution:
+conv_factor = 10
 
 #=======================================================
 #                   Useful functions                  
@@ -126,11 +129,12 @@ def gaus_func(x, mu, sigma):
 
 def dos_convolution(energies, dos_total, nGridpoints, smearing):
 	start = time.time()
+
 	# energy grid:
-	energyGrid = np.linspace(min_energy, max_energy, nGridpoints)
+	energyGrid = np.linspace(min_energy, max_energy, nGridpoints*conv_factor)
 
 	# Final dos:
-	final_dos = np.zeros(nGridpoints)
+	final_dos = np.zeros(nGridpoints*conv_factor)
 
 	# Make a gaussian:
 	gaussian = gaus_func(energyGrid, 0, smearing)
@@ -139,9 +143,9 @@ def dos_convolution(energies, dos_total, nGridpoints, smearing):
 
 	for index, item in enumerate(energies):
 		idx = (np.abs(energyGrid - item)).argmin()
-		final_dos[idx] = dos_total[index]*max_gaus*2
+		final_dos[idx] = dos_total[index]
 
-	final_dos = signal.fftconvolve(gaussian, final_dos, mode="same")*0.92*0.5
+	final_dos = signal.fftconvolve(gaussian, final_dos, mode="same")
 	
 	# Print time:
 	end = time.time()
