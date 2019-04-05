@@ -8,7 +8,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import signal
-import pickle, os, time
+import pickle, os, time, sys
 
 # Place all pdos files to process in the following directory:
 dir = str('inputs')
@@ -17,17 +17,22 @@ dir = str('inputs')
 parameter
 ------------------------------------------------------------------------------------------------------------------------------
 smearing : float
-
 Gaussian smearing value
-
 """
 smearing = 0.05
 
 """
 parameter
 ------------------------------------------------------------------------------------------------------------------------------
-method : string
+components : bool
+Write the s,p,d,f (etc.) decomposition for the components
+"""
+components = True
 
+"""
+parameter
+------------------------------------------------------------------------------------------------------------------------------
+method : string
 Method to use for smearing the density of states
 Choose from: shift, linalg, add or conv 
 Most reliable: linalg and add
@@ -41,9 +46,7 @@ method = "linalg"
 parameter
 ------------------------------------------------------------------------------------------------------------------------------
 grid_spacing : float
-
 Energy grid spacing
-
 For  shift: Use 0.0005 or smaller
 For   conv: Use 0.01
 For linalg: Use 0.01
@@ -52,20 +55,23 @@ For    add: Use 0.01
 # Default: 0.01
 grid_spacing = 0.01
 
+# Convolution requires a more converged grid, this many more grid points are used in convolution:
+# Technicallly [0,0,0,1,0,0,0,] is not a delta function but a tophat function
+conv_factor = 20
+
 """
 parameters
 ------------------------------------------------------------------------------------------------------------------------------
 minCalc : float
 maxCalc : float
-
 Energy range minimum and maximum (in eV), zero is fermi energy
 Final grid returned is slightly smaller than requested value in shift - use a slightly larger grid for this method
 """
 # Default: -12
-minCalc = -15
+minCalc = -12
 
 # Default: 12
-maxCalc =  15
+maxCalc =  12
 
 """
 parameters
@@ -73,7 +79,6 @@ parameters
 plot : bool
 savePickle : bool
 saveTxt : bool
-
 Boolean parameters to show a plot, save a pickle file or save a text file
 """
 # Should the program show a plot?
@@ -96,9 +101,6 @@ saveTxt = False
 # set to 1 for a.u. results
 conversion2ev = 27.2113838565563
 
-# Convolution requires a more converged grid, this many more grid points are used in convolution:
-conv_factor = 10
-
 #=======================================================
 #                   Useful functions                  
 #=======================================================
@@ -106,7 +108,6 @@ conv_factor = 10
 def gaus_func(x, mu, sigma):
 	"""
 	Gaussian function calculator
-
 	Parameters
 	------------- 
 	
@@ -115,7 +116,6 @@ def gaus_func(x, mu, sigma):
 	
 	mu : float
 	centre of unsmeared dos value
-
 	sigma : float 
 	smearing value of DOS
 	
@@ -123,29 +123,36 @@ def gaus_func(x, mu, sigma):
 	--------------
 	list
 	A list of values corresponding to a gaussian with unit area, centred around mu
-
 	"""
 	return np.exp(-np.power((x - mu)/sigma, 2) *0.5 )*(1/(sigma*np.sqrt(2*np.pi)))
 
-def dos_convolution(energies, dos_total, nGridpoints, smearing):
+def dos_convolution(energies, dos_total, projections, nGridpoints, smearing):
 	start = time.time()
 
 	# energy grid:
 	energyGrid = np.linspace(min_energy, max_energy, nGridpoints*conv_factor)
 
 	# Final dos:
-	final_dos = np.zeros(nGridpoints*conv_factor)
+	nComponents = len(projections[0])
+	nColumns = nComponents + 1
+	final_dos = np.zeros(( nColumns, nGridpoints*conv_factor ))
 
 	# Make a gaussian:
 	gaussian = gaus_func(energyGrid, 0, smearing)
 
-	max_gaus = max(gaussian)
+	if(components):
+		for index, item in enumerate(energies):
+			idx = (np.abs(energyGrid - item)).argmin()
+			final_dos[ 0, idx] = dos_total[index]
+			final_dos[1:, idx] = projections[index]
 
-	for index, item in enumerate(energies):
-		idx = (np.abs(energyGrid - item)).argmin()
-		final_dos[idx] = dos_total[index]
+	else:
+		for index, item in enumerate(energies):
+			idx = (np.abs(energyGrid - item)).argmin()
+			final_dos[0][idx] = dos_total[index]
 
-	final_dos = signal.fftconvolve(gaussian, final_dos, mode="same")
+	for index, _ in enumerate(final_dos):
+		final_dos[index] = signal.fftconvolve(gaussian, final_dos[index], mode="same")
 	
 	# Print time:
 	end = time.time()
@@ -153,17 +160,14 @@ def dos_convolution(energies, dos_total, nGridpoints, smearing):
 
 	return energyGrid, final_dos
 
-def dos_gaussian_addition(energies, dos_total, nGridpoints, smearing):
+def dos_gaussian_addition(energies, dos_total, projections, nGridpoints, smearing):
 	"""
 	Addition approach to smearing eigenvalues - should yield exactly the same answer as linalg
-
 	Advantages:
 	+ Very accurate
 	+ Output grids are consistent
-
 	Disadvantages:
 	- Slower than shift method
-
 	Parameters
 	------------- 
 	
@@ -172,7 +176,6 @@ def dos_gaussian_addition(energies, dos_total, nGridpoints, smearing):
 	
 	dos_total : list
 	DOS weightings
-
 	nGridPoints : float 
 	Number of grid points to perform this method on
 	
@@ -181,20 +184,33 @@ def dos_gaussian_addition(energies, dos_total, nGridpoints, smearing):
 	
 	Returns
 	--------------
-
 	list, list 
 	A list of energies and smeared eigenvalues
-
 	"""
 	# Time elapsed calculation:
 	start = time.time()
 
+	nComponents = len(projections[0])
+	nColumns = nComponents + 1
+	
+	# Energy grid:
 	energyGrid = np.linspace(min_energy, max_energy, nGridpoints)
-	# Final dos:
-	final_dos = np.zeros(nGridpoints)
 
-	for index, item in enumerate(energies):
-		final_dos += gaus_func(energyGrid, item, smearing)*dos_total[index]
+	# Final dos:
+	final_dos = np.zeros(( nColumns, nGridpoints ))
+
+	if components:
+		for index, item in enumerate(energies):
+			gaussian = gaus_func(energyGrid, item, smearing)
+			final_dos[0] += gaus_func(energyGrid, item, smearing)*dos_total[index]
+			
+			for index2, projection in enumerate(projections[index]):
+				final_dos[index2+1] += gaussian*projection
+	else:
+		for index, item in enumerate(energies):
+			gaussian = gaus_func(energyGrid, item, smearing)
+			final_dos[0] += gaus_func(energyGrid, item, smearing)*dos_total[index]
+
 	
 	# Time elapsed calculation:
 	end = time.time()
@@ -202,17 +218,14 @@ def dos_gaussian_addition(energies, dos_total, nGridpoints, smearing):
 
 	return energyGrid, final_dos
 
-def dos_linalg(energies, dos_total, nGridpoints, smearing):
+def dos_linalg(energies, dos_total, projections, nGridpoints, smearing):
 	"""
 	Matrix approach to smearing eigenvalues - should yield exactly the same answer as add
-
 	Advantages:
 	+ Very accurate
 	+ Output grids are consistent
-
 	Disadvantages:
 	- Slower than shift method
-
 	Parameters
 	------------- 
 	
@@ -221,7 +234,6 @@ def dos_linalg(energies, dos_total, nGridpoints, smearing):
 	
 	dos_total : list
 	DoS weightings
-
 	nGridPoints : float 
 	Number of grid points to perform this method on
 	
@@ -232,46 +244,51 @@ def dos_linalg(energies, dos_total, nGridpoints, smearing):
 	--------------
 	list, list 
 	A list of energies and smeared eigenvalues
-
 	"""
 
 	# Time elapsed calculation:
 	start = time.time()
 
+	nComponents = len(projections[0])
+	nColumns = nComponents + 1
+
+	# Final dos:
+	final_dos = np.zeros(( nColumns, nGridpoints ))
+
 	# Create energy values grid:
 	energyGrid = np.linspace(min_energy, max_energy, nGridpoints)
 
-	# Creates the mu part of the gaussian (in exponent)
+	# Creates the x part of the gaussian (in exponent)
 	x = np.ones((len(energyGrid), len(energies))) * (energies)
-	# Creates the x  part of the gaussian (in exponent)
+	# Creates the mu  part of the gaussian (in exponent)
 	mu = np.tensordot(energyGrid, np.ones(len(energies)), axes=0)
 	
 	# -(x-mu)^2/2\sigma^2
-	final_dos = -np.square((x - mu))/(2*smearing*smearing)
+	temp_dos = -np.square((x - mu))/(2*smearing*smearing)
 	# exp() of matrix elements
-	final_dos = np.exp(final_dos)
+	temp_dos = np.exp(temp_dos)
+
+	projections = np.c_[dos_total, projections]
+
 	# Multiply by weightings of each gaussian and scale to get correct area
-	final_dos = np.matmul(final_dos, dos_total)/(smearing*np.sqrt(2*np.pi))
-	
+	final_dos = np.matmul(temp_dos, projections)/(smearing*np.sqrt(2*np.pi))
+
 	# Time elapsed calculation:
 	end = time.time()
 	print(f"Time elapsed (s), linear algebra method: {end-start:.5f}")
 
-	return energyGrid, final_dos
+	return energyGrid, final_dos.T
 
-def dos_gaussian_shift(energies, dos_total, nGridpoints, smearing):
+def dos_gaussian_shift(energies, dos_total, projections, nGridpoints, smearing):
 	"""
 	Produces a single gaussian function then shifts the gaussian around the grid
-
 	Advantages:
 	+ Very fast compared to other methods
-
 	Disadvantages:
 	- Produces an edge effect, energy range should be larger than required
 	- Very reliable, but not as accurate as addition method as mean needs to be on energy grid
 	- Due to edge effect, grids produced will vary in size
 	- Grids can be made consistent but edge effect will be shown in data
-
 	Parameters
 	------------- 
 	energies : list
@@ -279,7 +296,6 @@ def dos_gaussian_shift(energies, dos_total, nGridpoints, smearing):
 	
 	dos_total : list
 	Density of states weightings
-
 	nGridPoints : float 
 	Number of grid points to perform this method on
 	
@@ -290,29 +306,43 @@ def dos_gaussian_shift(energies, dos_total, nGridpoints, smearing):
 	--------------
 	list, list 
 	A list of energies and smeared eigenvalues
-
 	"""
 	# Start time for function:
 	start = time.time()
 
+	nComponents = len(projections[0])
+	nColumns = nComponents + 1
+
 	# Create grid for energy values:
 	energyGrid = np.linspace(min_energy, max_energy, nGridpoints)
 	# Final dos using np:
-	final_dos = np.zeros(nGridpoints)
+	final_dos = np.zeros( (nColumns, nGridpoints) )
 	# Define gaussian function:
 	func = gaus_func(energyGrid, 0, smearing)
 	# Find max index of gaussian:
 	maximum = func.argmax()
 
-	# Move gaussian around grid until mean of gaussian is nearest to the DOS value
-	for index, item in enumerate(energies):
-		maximum = func.argmax()
-		idx = (np.abs(energyGrid - item)).argmin()
-		final_dos += np.roll(func, idx-maximum)*dos_total[index]
+	if components:
+		# Move gaussian around grid until mean of gaussian is nearest to the DOS value
+		for index, item in enumerate(energies):
+			maximum = func.argmax()
+			idx = (np.abs(energyGrid - item)).argmin()
+			rolled = np.roll(func, idx-maximum)
+			final_dos[0] += rolled*dos_total[index]
+				
+			for index2, projection in enumerate(projections[index]):
+				final_dos[index2+1] += rolled*projection
+	else:
+		for index, item in enumerate(energies):
+			maximum = func.argmax()
+			idx = (np.abs(energyGrid - item)).argmin()
+			rolled = np.roll(func, idx-maximum)
+			final_dos[0] += rolled*dos_total[index]
 
-	# Remove 3% of grid due to edge effects:
-	n = int(0.03*func.size)
-	final_dos = final_dos[n:-n]
+	# Remove 20% of grid due to edge effects:
+	n = int(0.2*func.size)
+	final_dos = final_dos[:, n:-n]
+
 	energyGrid = energyGrid[n:-n]
 
 	# finish timing:
@@ -335,7 +365,6 @@ for index, item in enumerate(file_list):
 
 
 for file in file_list:
-
 	# Opens the file, counts the number of lines:
 	with open (f"./{dir}/{file}", "r") as file_handle:
 		raw_data = file_handle.readlines()
@@ -393,8 +422,7 @@ for file in file_list:
 	min_energy = min_energy if min_energy > minCalc else minCalc
 
 	# Grid points corresponding to final dos energy:
-	nGridpoints_convolution = int( (max_energy - min_energy) / grid_spacing )
-	nGridpoints_addition = int( (max_energy - min_energy) / grid_spacing )
+	nGridpoints = int( (max_energy - min_energy) / grid_spacing )
 
 	# Remove indicies which indicies are too big/too small:
 	count = 0
@@ -403,6 +431,7 @@ for file in file_list:
 			count += 1
 			energies.pop(index)
 			occupations.pop(index)
+			projections.pop(index)
 			dos_total.pop(index)
 
 	# Prints no data points removed:
@@ -415,35 +444,34 @@ for file in file_list:
 	# fork in code, depends on which method you chose
 	# Debug option, calculate all methods and plot them:
 	if method == "debug":
-		grid,  final_dos  = dos_linalg(energies, dos_total, nGridpoints_addition, smearing)
-		grid1, final_dos1 = dos_convolution(energies, dos_total, nGridpoints_convolution, smearing)
-		grid2, final_dos2 = dos_gaussian_shift(energies, dos_total, nGridpoints_addition, smearing)
-		grid3, final_dos3 = dos_gaussian_addition(energies, dos_total, nGridpoints_addition, smearing)
+		grid,  final_dos  =            dos_linalg(energies, dos_total, projections, nGridpoints, smearing)
+		grid1, final_dos1 =       dos_convolution(energies, dos_total, projections, nGridpoints, smearing)
+		grid2, final_dos2 =    dos_gaussian_shift(energies, dos_total, projections, nGridpoints, smearing)
+		grid3, final_dos3 = dos_gaussian_addition(energies, dos_total, projections, nGridpoints, smearing)
 
 		plt.figure()
-		plt.plot(grid,  final_dos,  label="linear algebra")
-		plt.plot(grid1, final_dos1, label="convolution")
-		plt.plot(grid2, final_dos2, label="shift method")
-		plt.plot(grid3, final_dos3, label="addition method")
-
+		plt.plot(grid,   final_dos[2], label="linear algebra")
+		plt.plot(grid1, final_dos1[2], label="convolution")
+		plt.plot(grid2, final_dos2[2], label="shift method")
+		plt.plot(grid3, final_dos3[2], label="addition method")
 		plt.legend()
 		plt.show()
 
 	# Shift method
 	elif method == "shift":
-		grid, final_dos = dos_gaussian_shift(energies, dos_total, nGridpoints_addition, smearing)
+		grid, final_dos = dos_gaussian_shift(energies, dos_total, projections, nGridpoints, smearing)
 	
 	# Linear algebra method
 	elif method == "linalg":
-		grid, final_dos = dos_linalg(energies, dos_total, nGridpoints_addition, smearing)
+		grid, final_dos = dos_linalg(energies, dos_total, projections, nGridpoints, smearing)
 
 	# Addition method, same as old DoS script:
 	elif method == "add":
-		grid, final_dos = dos_gaussian_addition(energies, dos_total, nGridpoints_addition, smearing)
+		grid, final_dos = dos_gaussian_addition(energies, dos_total, projections, nGridpoints, smearing)
 	
 	# Convolution method, doesn't work very well:
 	elif method == "conv":
-		grid, final_dos = dos_convolution(energies, dos_total, nGridpoints_convolution, smearing)
+		grid, final_dos = dos_convolution(energies, dos_total, projections, nGridpoints, smearing)
 
 	# Goes here if you've done something wrong:
 	else:
@@ -474,4 +502,4 @@ for file in file_list:
 	if not os.path.isdir("./outputs"): os.mkdir('./outputs')
 
 	if saveTxt: np.savetxt('./outputs/' + file.replace('pdos', 'dat'), np.c_[grid, final_dos])
-	if savePickle: pickle.dump(np.c_[grid, final_dos], open('./outputs/' + file.replace('pdos', 'pickle'), 'wb' ), protocol=pickle.HIGHEST_PROTOCOL )
+	if savePickle: pickle.dump(np.c_[grid, final_dos.T], open('./outputs/' + file.replace('pdos', 'pickle'), 'wb' ), protocol=pickle.HIGHEST_PROTOCOL )
