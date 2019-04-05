@@ -35,7 +35,7 @@ Fastest: shift
 Choose debug to compare them all
 """
 # Default: linalg
-method = "debug"
+method = "linalg"
 
 """
 parameter
