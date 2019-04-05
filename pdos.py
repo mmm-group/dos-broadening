@@ -501,5 +501,5 @@ for file in file_list:
 
 	if not os.path.isdir("./outputs"): os.mkdir('./outputs')
 
-	if saveTxt: np.savetxt('./outputs/' + file.replace('pdos', 'dat'), np.c_[grid, final_dos])
+	if saveTxt: np.savetxt('./outputs/' + file.replace('pdos', 'dat'), np.c_[grid, final_dos.T])
 	if savePickle: pickle.dump(np.c_[grid, final_dos.T], open('./outputs/' + file.replace('pdos', 'pickle'), 'wb' ), protocol=pickle.HIGHEST_PROTOCOL )
